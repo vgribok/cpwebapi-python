@@ -27,7 +27,7 @@ from .oauth_utils import (
 
 # Disable insecure request warnings when connecting via Gateway
 urllib3.disable_warnings(exceptions.InsecureRequestWarning)
-
+requests.packages.urllib3.disable_warnings()
 
 @dataclasses.dataclass
 class APIRequest:
@@ -547,17 +547,18 @@ class OAuthSession(APISession):
         live_session_token: str = None,
         live_session_token_expiry: str = None,
     ):
-        self.__oauth_config = oauth_config
-        self.encryption_key = read_private_key(self.__oauth_config.encryption_key_fp)
-        self.signature_key = read_private_key(self.__oauth_config.signature_key_fp)
-        self.consumer_key = self.__oauth_config.consumer_key
-        self.access_token = self.__oauth_config.access_token
-        self.access_token_secret = self.__oauth_config.access_token_secret
-        self.dh_prime = read_and_parse_dh_pem_file(self.__oauth_config.dh_param_fp).parameter_numbers().p
-        self.realm = self.__oauth_config.realm
+        # self.__oauth_config = oauth_config
+        self.encryption_key = read_private_key(oauth_config.encryption_key_fp)
+        self.signature_key = read_private_key(oauth_config.signature_key_fp)
+        self.consumer_key = oauth_config.consumer_key
+        self.access_token = oauth_config.access_token
+        self.access_token_secret = oauth_config.access_token_secret
+        self.dh_prime = read_and_parse_dh_pem_file(oauth_config.dh_param_fp).parameter_numbers().p
+        self.realm = oauth_config.realm
         self.live_session_token = live_session_token
         self.live_session_token_expiration = live_session_token_expiry
         self.base_url = "https://api.ibkr.com/v1/api/"
+        self.is_test = oauth_config.is_test
 
     def make_api_request(
         self,
@@ -576,20 +577,22 @@ class OAuthSession(APISession):
         base_string = generate_base_string(
             method, request_url, request_headers, **dataclasses.asdict(request_data)
         )
+        # print(f'{method} \"{endpoint}\" base string:\n{base_string}')
         signature = self.__generate_request_signature(base_string, encryption_method)
+        # print(f'{method} \"{endpoint}\" request signature: {signature}')
         request_headers.update(request_data.extra_headers or {})
         request_headers["oauth_signature"] = signature
+        oauth_header_value: str = generate_authorization_header_string(request_headers, self.realm)
         response = requests.request(
             method,
             request_url,
             headers={
-                "authorization": generate_authorization_header_string(
-                    request_headers, self.realm
-                ),
+                "authorization": oauth_header_value,
             },
             params=request_data.params,
             json=request_data.body,
             data=request_data.form_data,
+            verify=False
         )
         return response
 
@@ -600,7 +603,7 @@ class OAuthSession(APISession):
         ENDPOINT = "oauth/live_session_token"
         REQUEST_METHOD = "POST"
         ENCRYPTION_METHOD = "RSA-SHA256"  # Only for this endpoint, in all other cases use HMAC-SHA256, which is the default.
-        dh_random = generate_dh_random_bytes()
+        dh_random = generate_dh_random_bytes(self.is_test)
         dh_challenge = generate_dh_challenge(self.dh_prime, dh_random)
         prepend = calculate_live_session_token_prepend(
             self.access_token_secret, self.encryption_key
@@ -642,7 +645,7 @@ class OAuthSession(APISession):
     def __generate_request_headers(
         self, signature_method: str = "HMAC-SHA256"
     ) -> dict[str, str]:
-        oauth_nonce = generate_oauth_nonce()
+        oauth_nonce = generate_oauth_nonce(self.is_test)
         oauth_timestamp = self.__get_utc_timestamp()
         request_headers = {
             "oauth_consumer_key": self.consumer_key,
@@ -661,6 +664,10 @@ class OAuthSession(APISession):
         return url
 
     def __get_utc_timestamp(self) -> int:
+        
+        if self.is_test:
+            return int(datetime.datetime(2010, 1, 1, tzinfo = datetime.timezone.utc).timestamp())
+
         return int(datetime.datetime.utcnow().timestamp())
 
     def __is_valid_live_session_token(self):
@@ -684,9 +691,7 @@ class OAuthSession(APISession):
         if encryption_method == "RSA-SHA256":
             signature = generate_rsa_sha_256_signature(base_string, self.signature_key)
         else:
-            signature = generate_hmac_sha_256_signature(
-                base_string, self.live_session_token
-            )
+            signature = generate_hmac_sha_256_signature(base_string, self.live_session_token)
         return signature
 
     @request("POST", "iserver/auth/ssodh/init")

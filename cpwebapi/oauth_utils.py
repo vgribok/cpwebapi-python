@@ -30,6 +30,7 @@ class OAuthConfig:
     dh_param_fp: os.PathLike
     access_token: str
     access_token_secret: str
+    is_test: bool = False
 
 
 def oauth_config_hook(config_data: dict[str, str]) -> OAuthConfig:
@@ -49,12 +50,16 @@ def read_private_key(private_key_fp: str) -> RSA.RsaKey:
     return private_key
 
 
-def generate_oauth_nonce() -> str:
+def generate_oauth_nonce(is_test: bool) -> str:
     """
     Generates a random nonce value. A unique nonce value is generated for each request.
     """
     NONCE_LENGTH = 32
     NONCE_CHARACTERS = string.ascii_letters + string.digits
+
+    if is_test:
+        return NONCE_CHARACTERS[:NONCE_LENGTH]
+    
     return "".join(random.choice(NONCE_CHARACTERS) for _ in range(NONCE_LENGTH))
 
 
@@ -94,11 +99,20 @@ def generate_base_string(
     return base_string
 
 
-def generate_dh_random_bytes() -> str:
+def generate_dh_random_bytes(is_test: bool) -> str:
     """
     Generates a random 256 bit number and returns it as a hex value. This is used when generating the DH challenge.
     """
     NUM_RANDOM_BITS = 256
+    # 
+    # random_bytes = bytearray(BYTE_COUNT)
+
+    if is_test:
+        BYTE_COUNT = NUM_RANDOM_BITS // 8
+        bytes_array = bytearray(range(BYTE_COUNT))
+        hex_string = ''.join(f'{b:02x}' for b in bytes_array)
+        return hex_string
+
     random_bytes = random.getrandbits(NUM_RANDOM_BITS)
     random_bytes_hex = hex(random_bytes)[2:]
     return random_bytes_hex
